@@ -1,0 +1,683 @@
+---
+title: "An Ensemble Model to Predict Chronic Kidney Disease (CKD): Development and Evaluation"
+subtitle: "DA5030"
+author: "Muller, Cynric"
+date: "Fall 2025"
+output:
+  html_document:
+    df_print: paged
+---
+
+## 1.Business Understanding
+
+Chronic Kidney Disease (CKD) is a progressive condition that requires early detection to prevent irreversible kidney damage. The objective of this project is to build a predictive model that can accurately classify individuals as CKD or Not-CKD based on routinely collected clinical and laboratory measurements.Such a model can support clinical decision-making by enabling earlier diagnosis and intervention.
+
+### 1.1 Goal of model construction:
+
+To construct, evaluate, and compare multiple machine learning classifiers—and ultimately develop a robust ensemble model—that can accurately predict CKD status using tabular medical data. The goal was not only to maximize predictive accuracy but also to ensure clinical interpretability and reliability.
+
+## 2. Load the Dataset
+```{r}
+url <- "https://raw.githubusercontent.com/Cynric07/Chronic_kidney/refs/heads/main/kidney_disease.csv"
+
+df <- read.csv(url, header = T,
+               strip.white = TRUE)
+
+head(df)
+```
+In this step, the dataset was imported directly from GitHub repository using `read.csv()`. The `strip.white = TRUE` argument was included to automatically remove any extra whitespace in character fields, ensuring cleaner categorical values. After loading the data into the dataframe 'df', the first few rows were displayed using `head()` to verify that the dataset was read correctly and that all columns appear in the expected format.
+
+## 3. Data Exploration and Prepration
+```{r}
+str(df)
+num.rows <- nrow(df)
+num.cols <- ncol(df)
+```
+
+The `str()` function was used to understand the structure of the dataset. The dataset consisted of `r num.rows` rows and `r num.cols` columns.
+
+```{r}
+# Remove Trailing spaces and Placeholder symbols like '?'
+df[df == "" | df == "?"] <- NA
+
+# Remove 'id' column as it has no predictive value
+df$id <- NULL
+
+# Continuous variables (numeric with decimals)
+continuous_vars <- c("sc", "pot", "hemo", "rc")
+for(col in continuous_vars) {
+  df[[col]] <- as.numeric(df[[col]])
+}
+
+# Integer variables (whole numbers)
+integer_vars <- c("age", "bp", "bgr", "bu", "sod", "pcv", "wc")
+for(col in integer_vars) {
+  df[[col]] <- as.integer(df[[col]])
+}
+
+# Binary variables (convert to 0/1)
+binary_vars <- c("rbc", "pc", "pcc", "ba", "htn", "dm", "cad", "appet", "pe", "ane", "classification")
+for(col in binary_vars) {
+  df[[col]] <- as.factor(df[[col]])
+}
+
+# Convert categorical variables to factors
+categorical_vars <- c("sg", "al", "su")
+
+for(col in categorical_vars) {
+  df[[col]] <- as.factor(df[[col]])
+}
+
+# Categorical/Target variable
+df$classification <- as.factor(df$classification)
+
+# Check structure
+str(df)
+```
+
+In this section, several preprocessing steps were applied to clean and prepare the dataset for modeling. First, placeholder symbols such as empty strings and “?” were replaced with `NA` to standardize missing values across the dataset. The `id` column was removed because it acts only as a row identifier and does not carry predictive information. Variables were then grouped by type to ensure consistent formatting. Continuous variables were converted to numeric, integer-based fields were converted to integer type, and binary variables were changed to factors for proper handling by classification algorithms.Additional categorical variables were also converted to factors to ensure that models interpret them correctly. The target variable `classification` was explicitly set as a factor to prepare it for supervised classification. Finally, the structure of the updated dataset was reviewed to confirm that all variables were formatted as intended
+
+```{r}
+summary(df)
+
+# Identify numeric and categorical columns
+numeric_cols <- names(df)[sapply(df, is.numeric)]
+
+categorical_cols <- names(df)[!sapply(df, is.numeric)]
+
+cat("\nNumeric features (", length(numeric_cols), "):\n", sep = "")
+print(numeric_cols)
+
+cat("\nCategorical features (", length(categorical_cols), "):\n", sep = "")
+print(categorical_cols)
+```
+
+The `summary()` function was used to obtain an overview of all variables in the dataset, including their central tendencies, ranges, and the number of missing values.The counts and lists of numeric and categorical columns were printed to verify that variables were classified correctly
+
+# 3.1 Distribution of Data
+```{r}
+#Distribution of columns
+par(mfrow = c(3, 4))
+for (col in numeric_cols) {
+  hist(df[[col]], main = paste("Histogram of", col),
+       xlab = col, col = "lightblue", border = "white")
+}
+par(mfrow = c(1, 1))
+```
+
+To better understand the distribution of each feature, exploratory visualizations were generated for both numeric and categorical variables. For numeric features, histograms were plotted in a grid layout to show the spread, shape, and potential skewness of each variable
+
+```{r}
+par(mfrow = c(2, 4))
+
+for (col in categorical_cols) {
+  if (col %in% names(df)) {
+    
+    counts <- table(df[[col]])         # frequency table
+    
+    barplot(counts,
+            main = paste("Distribution of", col),
+            xlab = col,
+            ylab = "Count",
+            col = "tan",
+            las = 2)                   # rotate x-labels if many categories
+  }
+}
+
+```
+
+Similarly, categorical variables were visualized using barplots, which summarize the frequency of each category within a feature. These plots highlight class imbalance issues and indicate whether certain categories dominate within a variable
+
+## 3.2 Find and Handle Missing Values
+
+```{r}
+missing_cols <-colSums(is.na(df))
+missing_cols
+
+```
+
+The first step in handling missing data was to quantify the number of `NA` values in each column using `colSums(is.na())`.
+
+```{r}
+# Create Missing Indicators for columns with missing data >20%
+high_missing <- c("rbc", "sod", "pot", "wc", "rc")
+
+for (col in high_missing) {
+    df[[paste0(col, "_missing")]] <- ifelse(is.na(df[[col]]), 1, 0)
+}
+
+# Median imputation for numeric columns
+df$age[is.na(df$age)] <- median(df$age, na.rm = TRUE)
+df$bp[is.na(df$bp)] <- median(df$bp, na.rm = TRUE)
+df$bgr[is.na(df$bgr)] <- median(df$bgr, na.rm = TRUE)
+df$bu[is.na(df$bu)] <- median(df$bu, na.rm = TRUE)
+df$sc[is.na(df$sc)] <- median(df$sc, na.rm = TRUE)
+df$sod[is.na(df$sod)] <- median(df$sod, na.rm = TRUE)
+df$pot[is.na(df$pot)] <- median(df$pot, na.rm = TRUE)
+df$hemo[is.na(df$hemo)] <- median(df$hemo, na.rm = TRUE)
+df$pcv[is.na(df$pcv)] <- median(df$pcv, na.rm = TRUE)
+df$wc[is.na(df$wc)] <- median(df$wc, na.rm = TRUE)
+df$rc[is.na(df$rc)] <- median(df$rc, na.rm = TRUE)
+
+# Mode imputation for categorical columns
+
+Mode <- function(x) {
+  x <- x[!is.na(x)]       # ignore NA values
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+df$sg[is.na(df$sg)] <- Mode(df$sg)
+df$al[is.na(df$al)] <- Mode(df$al)
+df$su[is.na(df$su)] <- Mode(df$su)
+df$rbc[is.na(df$rbc)] <- Mode(df$rbc)
+df$pc[is.na(df$pc)] <- Mode(df$pc)
+df$pcc[is.na(df$pcc)] <- Mode(df$pcc)
+df$ba[is.na(df$ba)] <- Mode(df$ba)
+df$htn[is.na(df$htn)] <- Mode(df$htn)
+df$dm[is.na(df$dm)] <- Mode(df$dm)
+df$cad[is.na(df$cad)] <- Mode(df$cad)
+df$appet[is.na(df$appet)] <- Mode(df$appet)
+df$pe[is.na(df$pe)] <- Mode(df$pe)
+df$ane[is.na(df$ane)] <- Mode(df$ane)
+```
+
+For columns with high proportion of missing values, binary missing-indicator variables were created. These indicators capture whether a value was originally missing, which can be informative for some classification models that benefit from structural missingness patterns. Numeric variables were imputed using the median of each feature. Median imputation is robust to outliers and preserves the central tendency of skewed distributions, making it a suitable choice for clinical measurements that may not be normally distributed. Categorical variables were imputed using the mode, defined as the most frequently occurring category within each feature. This approach maintains the most common class representation and avoids introducing artificial new categories.
+
+## 3.3 Outlier Analysis
+
+```{r}
+#Detect outliers using z-score method (3 SD rule)
+for (col in names(df)) {
+  if (is.numeric(df[[col]])) {
+    
+    mean_val <- mean(df[[col]], na.rm = TRUE)
+    sd_val <- sd(df[[col]], na.rm = TRUE)
+    
+    # Z-score > 3 or < -3
+    outliers <- df[[col]][abs(df[[col]] - mean_val) > 3 * sd_val]
+    
+    cat("\nColumn:", col, "\n")
+    cat("Number of outliers:", length(outliers), "\n")
+    if (length(outliers) > 0) {
+      cat("Outlier values:", outliers, "\n")
+    }
+  }
+}
+```
+
+Outlier detection was performed using the z-score method, where any numeric value exceeding three standard deviations from the mean was flagged as a potential outlier.Although several numeric features contained values flagged as statistical outliers, these observations were retained in the dataset. In clinical datasets such as chronic kidney disease (CKD), extreme values often represent true physiological states rather than data entry errors. Measurements such as elevated blood urea, serum creatinine, or blood glucose can vary widely between patients depending on disease severity, comorbidities, and treatment status. Removing such values would risk discarding meaningful clinical variation and could bias the model by artificially narrowing the range of patient presentations. Therefore, all detected outliers were kept to preserve the full clinical heterogeneity of the CKD population.
+
+## 3.4 Multicollinearity Check
+
+```{r}
+numeric_cols <- names(df)[sapply(df, is.numeric)]
+
+cor_matrix <- cor(df[, numeric_cols], use = "complete.obs")
+
+
+# Visualize correlation heatmap
+library(corrplot)
+corrplot(cor_matrix, method = "color", type = "upper",
+         tl.col = "black", tl.srt = 45, addCoef.col = "black",
+         number.cex = 0.7, diag = FALSE)
+```
+
+A correlation heatmap was generated for all numeric predictors. Using the course threshold of |r| > 0.8 to indicate multicollinearity, only one predictor pair exceeded this cutoff: hemoglobin (hemo) and red blood cell count (rc) showed a correlation of r = 0.85. This relationship is physiologically expected because hemoglobin concentration increases with red cell mass. Although correlated, both variables capture distinct hematological information relevant to CKD and were therefore retained. High correlations observed among missingness indicator variables (like sod_missing–pot_missing) reflect co-occurring missing lab tests and do not contribute to harmful multicollinearity because they are binary metadata rather than core numeric predictors. No predictors were removed based on multicollinearity.
+
+## 3.5 PCA analysis
+
+```{r}
+df_numeric <- df[, numeric_cols]
+df_scaled <- scale(df_numeric)
+pca_result <- prcomp(df_scaled, center = FALSE, scale. = FALSE)
+summary(pca_result)
+
+plot(pca_result, type = "l")
+```
+
+Principal Component Analysis (PCA) was performed on the numeric predictors after standardization to understand the underlying structure of the data and assess how much variance could be captured with a reduced dimensional representation. The PCA summary shows that PC1 explains `r round(summary(pca_result)$importance["Proportion of Variance", 1] * 100, 2)` % of the variance, and the first seven components together explain approximately `r round(summary(pca_result)$importance["Cumulative Proportion", 7] * 100, 2)` of the total variance. A scree plot confirms the gradual decline in explained variance after the first few components. Although PCA provides useful insight into the correlation structure and dimensionality of the numeric features, it was not used for downstream modeling because the dataset is relatively small and the original features are clinically interpretable. Models were therefore trained on the full (preprocessed) feature set without PCA transformation.
+
+## 3.6 Feature Engineering
+
+```{r}
+# Kidney function ratio
+df$kidney_function_ratio <- df$bu / df$sc
+
+# Blood pressure category
+df$bp_category <- cut(df$bp,
+                      breaks = c(-Inf, 119, 129, Inf),
+                      labels = c("normal", "elevated", "high"))
+```
+
+Two additional features were engineered to potentially improve model performance. First, a kidney function ratio was created by dividing blood urea by serum creatinine. Both measurements reflect renal function, and their ratio can help capture relative changes that may be more informative than either variable alone.Second, a categorical blood pressure feature was derived by grouping systolic blood pressure values into clinically meaningful ranges (“normal,” “elevated,” and “high”). This transformation simplifies interpretation and may help the model detect non-linear relationships between blood pressure levels and CKD status.
+
+## 3.7 Split the data into training and validation(test) 
+```{r}
+# Bar plot for class distribution
+barplot(table(df$classification),
+        col = c("steelblue", "yellow"),
+        main = "Distribution of classification variable",
+        ylab = "Count",
+        xlab = "class")
+
+library(caret)
+
+# Train-test split (stratified)
+set.seed(123)
+split <- createDataPartition(df$classification, p = 0.80, list = FALSE)
+train <- df[split, ]
+test <- df[-split, ]
+
+#Check sizes
+nrow(train)
+nrow(test)
+
+#Check target variable distribution in training and train dataset as well
+prop.table(table(train$classification))
+prop.table(table(test$classification))
+```
+
+The target variable showed a mild class imbalance (`r round(prop.table(table(df$classification))["ckd"] * 100, 2)`% CKD vs. `r round(prop.table(table(df$classification))["notckd"] * 100, 2)`% Not-CKD). Since the minority class is above 30%, the imbalance was not considered severe. Therefore, oversampling techniques such as SMOTE were not applied, as they may introduce unrealistic synthetic physiological values in a small medical dataset.Instead, stratified sampling was used during the train–test split to preserve the class distribution across both subsets. This ensures balanced model training without artificially modifying the data.The dataset was divided into training and testing sets using an 80–20 split, with stratification based on the target variable. Stratified sampling ensures that both sets maintain the same proportion of CKD and non-CKD cases, which is important for preventing class imbalance from biasing model performance.
+
+## 4.Modeling
+
+### 4.1 Model-A: Logistic Regression Modeling 
+```{r}
+#Splitting data into train and test for Logistic Regression
+library(caret)
+library(glmnet)
+
+#Convert target to binary factor
+train$classification <- factor(train$classification, levels = c("notckd", "ckd"))
+test$classification  <- factor(test$classification,  levels = c("notckd", "ckd"))
+
+#One-hot encoding for all predictors
+x_train <- model.matrix(classification ~ . - 1, data=train)
+x_test  <- model.matrix(classification ~ . - 1, data=test)
+
+
+#Scale numeric columns
+x_train <- scale(x_train)
+x_test  <- scale(x_test, center = attr(x_train, "scaled:center"),
+                           scale  = attr(x_train, "scaled:scale"))
+
+y_train <- train$classification
+y_test  <- test$classification
+
+```
+
+The target variable was recoded into a binary factor.All predictor variables were converted into a numeric design matrix using one-hot encoding, since GLMNET can only operate on numeric inputs. The numeric predictors were then standardized so that each feature contributed equally during model fitting, and the same scaling parameters from the training set were applied to the test set to avoid data leakage.
+
+## 4.1.1 Train and Hyperparameter tuning for LR model
+```{r}
+set.seed(123)
+cv_fit <- cv.glmnet(
+  x = x_train,
+  y = y_train,
+  family = "binomial",
+  alpha = 0,        # ridge penalty (best for separation)
+  type.measure = "class",
+  nfolds = 10
+)
+
+best_lambda <- cv_fit$lambda.min
+best_lambda
+```
+
+To train the model, penalized logistic regression was implemented using the `cv.glmnet()` function, which performs internal hyperparameter tuning by evaluating a sequence of λ values via 10-fold cross-validation. The optimal regularization parameter λ was selected as the value minimizing cross-validated classification error (lambda.min). This process simultaneously tunes the model and evaluates its performance using k-fold cross-validation.
+
+## 4.1.2 LR model evaluation
+```{r}
+# x_test already scaled
+pred_prob <- predict(cv_fit, newx = x_test, s = "lambda.min", type = "response")
+
+pred_class <- ifelse(pred_prob > 0.5, "ckd", "notckd")
+pred_class <- factor(pred_class, levels = c("notckd", "ckd"))
+
+#Create Confusion Matrix for evaluation of performance of model
+log_cm <- confusionMatrix(pred_class, y_test)
+log_cm
+
+log_accuracy   <- log_cm$overall["Accuracy"]
+log_sensitivity <- log_cm$byClass["Sensitivity"]
+log_specificity <- log_cm$byClass["Specificity"]
+```
+
+After training the logistic regression model, predicted probabilities for the test set were generated and converted into class labels using a 0.5 threshold. A confusion matrix was then computed to evaluate the model’s classification performance. From this matrix, multiple performance metrics were extracted, including accuracy, sensitivity, and specificity.
+
+```{r}
+library(pROC)
+
+roc_obj <- roc(y_test, as.numeric(pred_prob))
+log_auc <- auc(roc_obj)
+log_auc <- as.numeric(log_auc)
+plot(roc_obj, col="navyblue", lwd=2, main="ROC Curve - Logistic Regression")
+```
+
+To further assess discriminatory power, an ROC curve was constructed using the predicted probabilities. The ROC curve illustrates the trade-off between sensitivity and specificity across all possible thresholds. The area under the ROC curve (AUC) was then calculated as a single summary statistic of model performance. A higher AUC indicates that the model is effective at ranking CKD and non-CKD patients based on predicted risk, reflecting strong overall discriminative ability.
+
+## 4.2 Model-B: Random Forest Modeling
+```{r}
+rf_train <- train
+rf_test  <- test
+
+# convert character columns to factors
+rf_train[sapply(rf_train, is.character)] <- lapply(rf_train[sapply(rf_train, is.character)], factor)
+rf_test[sapply(rf_test, is.character)]   <- lapply(rf_test[sapply(rf_test, is.character)], factor)
+
+# ensure outcome factor levels are consistent
+rf_train$classification <- factor(rf_train$classification, levels=c("notckd","ckd"))
+rf_test$classification  <- factor(rf_test$classification,  levels=c("notckd","ckd"))
+```
+
+Before training the Random Forest model, all character-type predictors were converted into factors to ensure that the algorithm correctly treats them as categorical variables. The outcome variable was also re-leveled to maintain consistent class ordering between the training and testing sets, which is required for accurate evaluation during model prediction.
+
+## 4.2.1 Train and Hyperparameter tuning for Random Forest
+```{r}
+library(caret)
+library(randomForest)
+
+set.seed(123)
+
+rf_control <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+rf_grid <- expand.grid(
+  mtry = c(2, 4, 6, 8, 10, 12)
+)
+
+rf_model <- train(
+  classification ~ .,
+  data = rf_train,
+  method = "rf",
+  metric = "ROC",
+  trControl = rf_control,
+  tuneGrid = rf_grid
+)
+
+rf_model$bestTune
+```
+To tune the model, we used `trainControl()`, specifying 10-fold CV and enabling class probability estimation. The model was optimized using the ROC metric, which is appropriate for binary classification problems with potential class imbalance. A grid of `mtry` values—the key Random Forest tuning parameter controlling the number of variables sampled at each split—was constructed to explore different levels of model complexity.
+
+The `train()` function from the caret package was then used to fit the Random Forest model while simultaneously evaluating each hyperparameter combination through cross-validation. This process helps identify the `mtry` value that yields the best discriminative performance and reduces the risk of overfitting.
+
+## 4.2.2 RF Model Evaluation 
+```{r}
+rf_pred_class <- predict(rf_model, newdata = rf_test)
+rf_pred_prob  <- predict(rf_model, newdata = rf_test, type="prob")[, "ckd"]
+
+rf_cm <- confusionMatrix(rf_pred_class, rf_test$classification)
+rf_cm
+
+rf_accuracy    <- rf_cm$overall["Accuracy"]
+rf_sensitivity <- rf_cm$byClass["Sensitivity"]
+rf_specificity <- rf_cm$byClass["Specificity"]
+```
+After training the Random Forest model, predictions were generated for both class labels and class probabilities on the test dataset. A confusion matrix was then constructed to quantify the model’s performance. From this matrix, key evaluation metrics—including accuracy, sensitivity, and specificity were calculated to assess how well the model distinguishes between CKD and non-CKD cases
+
+```{r}
+library(pROC)
+
+rf_roc <- roc(rf_test$classification, rf_pred_prob)
+rf_auc <- auc(rf_roc)
+rf_auc <- as.numeric(rf_auc)
+plot(rf_roc, col="navyblue", lwd=2, main="ROC Curve - Random Forest")
+```
+
+To complement the confusion matrix, an ROC curve was plotted using predicted probabilities for the positive class. The ROC curve illustrates how sensitivity and specificity vary across different classification thresholds. The area under the curve (AUC) was then computed as a summary measure of model discrimination. A higher AUC value indicates that the Random Forest model is highly effective in ranking patients according to their likelihood of having CKD, showcasing strong overall predictive performance.
+
+## 4.3 Model-C: Support Vector Machines(SVM) Modeling
+```{r}
+
+#Create encoded matrices (train/test separately)
+x_train_svm <- model.matrix(classification ~ . - 1, data=train)
+x_test_svm  <- model.matrix(classification ~ . - 1, data=test)
+
+y_train_svm <- train$classification
+y_test_svm  <- test$classification
+
+
+#Scale manually using training statistics
+scaled_train <- scale(x_train_svm)
+scaled_test  <- scale(
+  x_test_svm,
+  center = attr(scaled_train, "scaled:center"),
+  scale  = attr(scaled_train, "scaled:scale")
+)
+
+x_train_svm <- as.matrix(scaled_train)
+x_test_svm  <- as.matrix(scaled_test)
+
+```
+
+For the Support Vector Machine (SVM) model, one-hot encoding was first applied using `model.matrix()` to convert all predictors into numeric form, since SVMs require numerical features. The training and testing matrices were created separately to avoid any leakage of information between datasets. Because SVMs are sensitive to differences in feature scale, all predictors were standardized. Scaling was carried out using only the training data to compute the mean and standard deviation, and these same scaling parameters were applied to the test set.
+
+## 4.3.1 Training and Hyperparameter tuning of SVM model
+```{r warning=FALSE}
+library(caret)
+library(kernlab)
+
+set.seed(123)
+
+svm_control <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+svm_grid <- expand.grid(
+  C = c(0.25, 0.5, 1, 2, 4),
+  sigma = c(0.01, 0.02, 0.05, 0.1)
+)
+
+svm_model <- train(
+  x = x_train_svm,
+  y = y_train_svm,
+  method = "svmRadial",
+  metric = "ROC",
+  trControl = svm_control,
+  tuneGrid = svm_grid,
+  preProcess = NULL
+)
+
+```
+
+To train the SVM model, a 10-fold cross-validation framework was defined using `trainControl()`, enabling class probability estimation and ROC-based performance evaluation.A tuning grid was constructed to explore combinations of two key SVM hyperparameters: C (cost), which controls the trade-off between margin width and misclassification, and sigma, which defines the spread of the radial basis function (RBF) kernel. The model was then trained using the radial kernel (`svmRadial`) within the caret framework, with ROC as the optimization metric. This ensures that the selected hyperparameters yield the strongest discrimination between CKD and non-CKD cases. By evaluating each (C, sigma) pair, the training process identifies the best configuration for maximizing predictive performance while reducing overfitting.
+
+## 4.3.2 SVM Model Evaluation
+```{r}
+svm_pred_class <- predict(svm_model, newdata = x_test_svm)
+svm_pred_prob  <- predict(svm_model, newdata = x_test_svm, type="prob")[, "ckd"]
+
+svm_cm <- confusionMatrix(svm_pred_class, y_test_svm)
+svm_cm
+
+svm_accuracy    <- svm_cm$overall["Accuracy"]
+svm_sensitivity <- svm_cm$byClass["Sensitivity"]
+svm_specificity <- svm_cm$byClass["Specificity"]
+```
+
+After training the SVM model, predictions were generated for both class labels and class probabilities on the test set. A confusion matrix was computed to evaluate the model's performance. From this, standard metrics such as accuracy, sensitivity, and specificity were extracted. These metrics indicate how effectively the SVM distinguishes between CKD and non-CKD cases.
+
+```{r}
+library(pROC)
+svm_roc <- roc(y_test_svm, svm_pred_prob)
+svm_auc <- auc(svm_roc)
+svm_auc <- as.numeric(svm_auc)
+plot(svm_roc, col= "navyblue", lwd=2, main="ROC Curve - SVM (Scaled + Encoded)")
+
+```
+
+An ROC curve was then plotted using the predicted probabilities to assess the model’s discriminative power across all classification thresholds. The area under the curve (AUC) was calculated as a single summary statistic. A high AUC value indicates that the SVM is highly effective at ranking patients by CKD risk, confirming strong model performance
+
+## 4.4 Bagging for Logistic Regression and SVM
+
+```{r}
+
+set.seed(123)
+
+bag_ctrl <- trainControl(
+  method = "boot",          # bootstrap resampling
+  number = 50,              # 50 bootstrap samples
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+Bagging (Bootstrap Aggregating) was applied to the Logistic Regression and SVM models to reduce variance and improve model stability. Using the `trainControl()` function, a bootstrap resampling procedure was defined with multiple bootstrap samples. For each bootstrap iteration, a new training subset is drawn with replacement, the model is retrained, and predictions are aggregated across all resamples. This process helps the model generalize better by reducing sensitivity to fluctuations in the training data.
+
+```{r}
+train_lr_df <- data.frame(x_train)
+train_lr_df$classification <- y_train
+
+set.seed(123)
+
+bag_log_reg <- train(
+  classification ~ .,
+  data = train_lr_df,
+  method = "glmnet",
+  metric = "ROC",
+  trControl = bag_ctrl,
+  tuneGrid = expand.grid(alpha = 0,  # ridge penalty
+                         lambda = seq(0.0001, 1, length = 20))
+)
+```
+
+For logistic regression, the bootstrapped model was implemented using the GLMNET framework with ridge regularization, and a grid of λ values was evaluated to identify the optimal level of shrinkage.
+
+```{r warning=FALSE}
+train_svm_df <- data.frame(x_train)
+train_svm_df$classification <- y_train
+
+set.seed(123)
+
+bag_svm <- train(
+  classification ~ .,
+  data = train_svm_df,
+  method = "svmRadial",
+  metric = "ROC",
+  trControl = bag_ctrl,
+  tuneLength = 5              # caret will tune C + sigma automatically
+)
+```
+
+For SVM, the bootstrapped version was trained using the radial kernel. The `tuneLength` parameter allowed caret to automatically explore combinations of the cost and kernel width parameters. Bagging these models provides a more robust estimate of their true predictive performance by averaging results across many resampled training sets.
+
+## 4.4.1 Evaluation of Bagged LR and SVM Models
+```{r}
+test_df <- data.frame(x_test)
+test_df$classification <- y_test
+
+pred_lr <- predict(bag_log_reg, test_df)
+probs_lr <- predict(bag_log_reg, test_df, type="prob")[,2]
+
+bag_lr_cm <- confusionMatrix(pred_lr, y_test)
+bag_lr_accuracy    <- bag_lr_cm$overall["Accuracy"]
+bag_lr_sensitivity <- bag_lr_cm$byClass["Sensitivity"]
+bag_lr_specificity <- bag_lr_cm$byClass["Specificity"]
+
+roc_lr <- roc(response=y_test, predictor=probs_lr)
+bag_lr_auc <- as.numeric(auc(roc_lr))
+
+pred_svm <- predict(bag_svm, test_df)
+probs_svm <- predict(bag_svm, test_df, type="prob")[,2]
+
+bag_svm_cm <- confusionMatrix(pred_svm, y_test)
+bag_svm_accuracy    <- bag_svm_cm$overall["Accuracy"]
+bag_svm_sensitivity <- bag_svm_cm$byClass["Sensitivity"]
+bag_svm_specificity <- bag_svm_cm$byClass["Specificity"]
+
+roc_svm <- roc(response=y_test, predictor=probs_svm)
+bag_svm_auc <- as.numeric(auc(roc_svm))
+
+```
+
+To evaluate the performance of the bagged logistic regression and bagged SVM models, predictions and predicted probabilities were generated for the test set. Confusion matrices were then computed to extract key evaluation metrics such as accuracy, sensitivity, and specificity. These metrics summarize each model’s ability to correctly classify CKD and non-CKD cases after the bagging procedure.In addition to confusion-matrix-based metrics, ROC curves were constructed using the predicted probabilities for the positive class. The area under each ROC curve (AUC) was calculated.
+
+## 5. Heteregenous Model Ensemble Construction and Evaluation
+```{r}
+prob_df <- data.frame(
+  lr  = probs_lr,
+  rf  = rf_pred_prob,
+  svm = probs_svm
+)
+
+# average predicted probabilities
+ensemble_prob <- rowMeans(prob_df)
+
+# convert probability to class label
+ensemble_class <- ifelse(ensemble_prob > 0.5, "ckd", "notckd")
+ensemble_class <- factor(ensemble_class, levels = levels(y_test))
+
+# evaluation
+ens_cm <-confusionMatrix(ensemble_class, y_test)
+ens_accuracy    <- ens_cm$overall["Accuracy"]
+ens_sensitivity <- ens_cm$byClass["Sensitivity"]
+ens_specificity <- ens_cm$byClass["Specificity"]
+
+# ROC + AUC
+ensemble_roc <- roc(response = y_test, predictor = ensemble_prob)
+ens_auc<- as.numeric(auc(ensemble_roc))
+plot(ensemble_roc, col="navyblue", lwd=2, main="ROC Curve - Hetergenous Ensemble")
+```
+
+A heterogeneous ensemble model was constructed by combining the predicted probabilities from three base learners—bagged logistic regression, Random Forest, and bagged SVM. Averaging their predicted probabilities leverages complementary strengths, often resulting in more stable and accurate predictions. The ensemble probability was then converted into a final class label using a 0.5 decision threshold.To assess the ensemble model’s performance, a confusion matrix was generated, and key metrics such as accuracy, sensitivity, and specificity were calculated. These metrics provide insight into the ensemble’s ability to correctly classify CKD and non-CKD patients. Finally, an ROC curve was plotted using the averaged probabilities, and the AUC was computed to summarize the model’s discriminative ability. A high AUC value indicates that the ensemble effectively integrates information from all three base models to achieve strong overall predictive performance.
+
+Stacking was explored using caretList and caretStack, but it could not be applied due to structural limitations of the CKD dataset. The dataset is relatively small, has moderate class imbalance, and contains numerous categorical predictors that require dummy encoding. During cross-validation, one or more base learners failed to produce consistent out-of-fold predictions, causing the meta-learner to collapse into a degenerate model that predicted a single class for all samples. As a result, stacking did not produce valid row-wise probability predictions and was excluded from the final analysis. A soft-voting ensemble was used instead.
+
+## 6. Model Performance and Comparison
+```{r}
+model_comparison <- data.frame(
+  Model = c("Logistic Regression", "Random Forest", "SVM (RBF)", 
+            "Bagged Logistic", "Bagged SVM", "Ensemble (LR + RF + SVM)"),
+  
+  Accuracy = c(log_accuracy, rf_accuracy, svm_accuracy,
+               bag_lr_accuracy, bag_svm_accuracy, ens_accuracy),
+
+  Sensitivity = c(log_sensitivity, rf_sensitivity, svm_sensitivity,
+                  bag_lr_sensitivity, bag_svm_sensitivity, ens_sensitivity),
+
+  Specificity = c(log_specificity, rf_specificity, svm_specificity,
+                  bag_lr_specificity, bag_svm_specificity, ens_specificity),
+
+  AUC = c(log_auc, rf_auc, svm_auc,
+          bag_lr_auc, bag_svm_auc, ens_auc)
+)
+
+knitr::kable(model_comparison, digits = 4,
+             caption = "Model Performance Comparison")
+```
+
+**1.Logistic Regression**: Logistic Regression achieved an accuracy of `r log_accuracy`, correctly classifying nearly all test samples. Its sensitivity `r log_sensitivity` indicates that it was able to correctly identify `r round(log_sensitivity * 100, 2)`% of CKD cases, demonstrating strong recall for the positive class. Its specificity `r log_specificity` shows perfect detection of non-CKD individuals, meaning no false positives were produced.
+The model also achieved an AUC of `r log_auc`, suggesting perfect separability between CKD and non-CKD classes across all thresholds.
+
+**2.Random Forest**: Random Forest matched Logistic Regression in overall performance, achieving an accuracy of `r rf_accuracy`, meaning that only one test sample was misclassified. Its sensitivity `r rf_sensitivity` and specificity `r rf_specificity` is similar those of Logistic Regression, again indicating strong identification of CKD while perfectly identifying non-CKD individuals.Its AUC was `r rf_auc``, showing perfect ranking ability across predicted probabilities.
+
+**3.SVM (RBF Kernel)**: Support Vector Machine achieved perfect performance across all metrics: Accuracy = `r svm_accuracy`, Sensitivity = `r svm_sensitivity`, Specificity = `r svm_specificity` and AUC = `r svm_auc`.
+
+**4.Bagged Logistic Regression**: Bagged Logistic Regression achieved a similar perfect performance across all metrics like SVM: Accuracy = `r bag_lr_accuracy`, Sensitivity = `r bag_lr_sensitivity`, Specificity = `r bag_lr_specificity` and AUC = `r bag_lr_auc`.
+
+**5.Bagged SVM**: Similar to Bagged Logistic Regression, the Bagged SVM too reached perfect prediction across all evaluation metrics. Given that the base SVM already achieved perfect scores, bagging primarily reinforces model stability and reduces risk of variance due to sampling.
+
+**6.Heterogeneous Ensemble**: The final soft-voting ensemble achieved perfect performance:Accuracy = `r ens_accuracy`, Sensitivity = `r ens_sensitivity`, Specificity = `r ens_specificity`, AUC = `r ens_auc`. We averaged the predicted probabilities from diverse base learners. Each model captures different patterns, the Logistic Regression learns linear effects, the Random Forest learns interactions and finally SVM captures non-linear boundaries. By combining these perspectives, the ensemble becomes more robust than any individual model. Its perfect scores indicate that agreement across diverse learners strengthens confidence in predictions and minimizes risks of model-specific biases.
+
+## 7. Model Performance Interpretation
+
+Although the performance metrics appear perfect, this outcome is reasonable for the CKD dataset after preprocessing. CKD is strongly associated with a small set of clinical indicators such as serum creatinine, blood urea, hemoglobin, red blood cell count, and presence of hypertension. Once missing values are imputed and features are standardized, these variables become highly separable between CKD and non-CKD classes.
+
+Across all models, prediction performance on the Chronic Kidney Disease dataset was exceptionally high. Logistic Regression and Random Forest each achieved `r round(log_accuracy *100, 2)`% accuracy with excellent sensitivity and perfect specificity. SVM and both bagged models achieved perfect predictive performance, demonstrating that the CKD data contains clear and strong patterns that are easily separable by multiple classifiers. The heterogeneous soft-voting ensemble, which combines Logistic Regression, Random Forest, and SVM predictions, also attained perfect scores, confirming that the consensus of diverse models is highly stable and reliable.
+
+Stacking was attempted but was not included in the final results due to instability in out-of-fold predictions arising from dataset size and model heterogeneity. Instead, soft-voting was adopted as a more appropriate ensemble technique for this clinical dataset. The **final ensemble model** is recommended due to its superior generalization, interpretability, and robustness and AUC = **`r ens_auc`**.
+
+## 8. Data Reference (APA format):
+Dua, D., & Graff, C. (2019). UCI Machine Learning Repository. Irvine, CA: University of California, School of Information and Computer Science. https://archive.ics.uci.edu/ml/datasets/chronic_kidney_disease.
+
+The dataset used in this analysis was accessed from a public mirror hosted on GitHub: https://raw.githubusercontent.com/Cynric07/Chronic_kidney/refs/heads/main/kidney_disease.csv
